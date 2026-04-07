@@ -112,6 +112,7 @@ type AppState = {
   printSize: PrintSize;
   includeSummary: boolean;
   showHistory: boolean;
+  canvasAspect: number;
 };
 
 type DragState =
@@ -134,6 +135,7 @@ const STORAGE_KEY = "land-layout-planner:v1";
 const MAX_HISTORY = 80;
 const WORLD_WIDTH = 72;
 const WORLD_HEIGHT = 46;
+const DEFAULT_CANVAS_ASPECT = WORLD_WIDTH / WORLD_HEIGHT;
 const DEFAULT_PAN: Point = { x: -8, y: 0 };
 const LEGACY_DEFAULT_PAN: Point = { x: -8, y: -7 };
 
@@ -170,6 +172,7 @@ app.addEventListener("dblclick", handleDoubleClick);
 window.addEventListener("pointermove", handlePointerMove);
 window.addEventListener("pointerup", handlePointerUp);
 window.addEventListener("keydown", handleKeyDown);
+window.addEventListener("resize", scheduleCanvasAspectSync);
 
 function loadState(): AppState {
   const fallback = createInitialState();
@@ -208,6 +211,7 @@ function loadState(): AppState {
       printSize: parsed.printSize === "A3" ? "A3" : "A4",
       includeSummary: parsed.includeSummary !== false,
       showHistory: false,
+      canvasAspect: normalizeCanvasAspect(parsed.canvasAspect),
     };
   } catch {
     return fallback;
@@ -237,6 +241,7 @@ function createInitialState(): AppState {
     printSize: "A4",
     includeSummary: true,
     showHistory: false,
+    canvasAspect: DEFAULT_CANVAS_ASPECT,
   };
 }
 
@@ -351,6 +356,10 @@ function normalizeNewElement(input: unknown): NewElementDraft {
 
 function normalizePositiveNumber(value: unknown, fallback: number) {
   return clamp(toNumber(value, fallback), 0.1, 10000);
+}
+
+function normalizeCanvasAspect(value: unknown) {
+  return clamp(toNumber(value, DEFAULT_CANVAS_ASPECT), 0.5, 4);
 }
 
 function normalizeElement(input: unknown): SiteElement | undefined {
@@ -507,6 +516,7 @@ function render() {
       ${renderPrintSummary(project, warnings)}
     </div>
   `;
+  scheduleCanvasAspectSync();
 }
 
 function renderProjectTab(project: Project) {
@@ -2301,12 +2311,37 @@ function persist() {
   );
 }
 
+function scheduleCanvasAspectSync() {
+  requestAnimationFrame(() => {
+    const svg = document.querySelector<SVGSVGElement>("#plan-svg");
+
+    if (!svg) {
+      return;
+    }
+
+    const rect = svg.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) {
+      return;
+    }
+
+    const nextAspect = normalizeCanvasAspect(rect.width / rect.height);
+    if (Math.abs(nextAspect - state.canvasAspect) < 0.01) {
+      return;
+    }
+
+    state.canvasAspect = nextAspect;
+    render();
+  });
+}
+
 function currentView(project: Project) {
+  const width = WORLD_WIDTH / project.zoom;
+
   return {
     x: project.pan.x,
     y: project.pan.y,
-    width: WORLD_WIDTH / project.zoom,
-    height: WORLD_HEIGHT / project.zoom,
+    width,
+    height: width / state.canvasAspect,
   };
 }
 
