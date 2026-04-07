@@ -37,7 +37,7 @@ The app persists project history in the user's browser with `localStorage`. Use 
 - Multiple local projects with tabs, history, duplicate, delete, import, export, and `localStorage` persistence.
 - New project tabs start as blank canvases; duplicate keeps the current option for comparison.
 - SVG grid-paper workspace with zoom, pan, scale label, north arrow, and snapping.
-- Rectangular preset land plus click-to-draw freeform land boundary, side-length editing, removal, and a front-edge marker.
+- Defined-size rectangular land plus click-to-draw freeform land boundary, side-length editing, rotation, removal, and a front-edge marker.
 - Rectangular and freeform polygon site elements with category defaults.
 - Selection, dragging, exact X/Y, width/depth, rotation, color, label, and legend controls.
 - Freeform land and element vertex editing.

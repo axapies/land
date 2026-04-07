@@ -106,6 +106,8 @@ type AppState = {
   landDraft: Point[];
   elementDraft: Point[];
   newElement: NewElementDraft;
+  landRectWidth: number;
+  landRectDepth: number;
   noteText: string;
   printSize: PrintSize;
   includeSummary: boolean;
@@ -199,6 +201,8 @@ function loadState(): AppState {
       landDraft: [],
       elementDraft: [],
       newElement: normalizeNewElement(parsed.newElement),
+      landRectWidth: normalizePositiveNumber(parsed.landRectWidth, 23),
+      landRectDepth: normalizePositiveNumber(parsed.landRectDepth, 45.5),
       noteText: typeof parsed.noteText === "string" ? parsed.noteText : "Check sightline here",
       printSize: parsed.printSize === "A3" ? "A3" : "A4",
       includeSummary: parsed.includeSummary !== false,
@@ -226,6 +230,8 @@ function createInitialState(): AppState {
       height: 9,
       color: categoryDefaults.house.color,
     },
+    landRectWidth: 23,
+    landRectDepth: 45.5,
     noteText: "Check sightline here",
     printSize: "A4",
     includeSummary: true,
@@ -340,6 +346,10 @@ function normalizeNewElement(input: unknown): NewElementDraft {
     height: clamp(toNumber(draft.height, defaults.height), 0.2, 200),
     color: typeof draft.color === "string" ? draft.color : defaults.color,
   };
+}
+
+function normalizePositiveNumber(value: unknown, fallback: number) {
+  return clamp(toNumber(value, fallback), 0.1, 10000);
 }
 
 function normalizeElement(input: unknown): SiteElement | undefined {
@@ -568,8 +578,25 @@ function renderWorkspacePanel(project: Project) {
         ${toolButton("draw-land", "Draw land")}
         ${toolButton("place-note", "Place note")}
       </div>
+      <div class="land-setup">
+        <div class="field-pair">
+          <label class="field">
+            Rect width (m)
+            <input data-field="landRect.width" type="number" min="0.1" step="0.1" value="${roundM(
+              state.landRectWidth,
+            )}" />
+          </label>
+          <label class="field">
+            Rect depth (m)
+            <input data-field="landRect.depth" type="number" min="0.1" step="0.1" value="${roundM(
+              state.landRectDepth,
+            )}" />
+          </label>
+        </div>
+        <p class="hint">Rectangle area: ${formatMeters(state.landRectWidth * state.landRectDepth, "m2")}</p>
+      </div>
       <div class="button-grid land-actions">
-        <button data-action="rect-land" type="button">Use 42 x 28 m preset</button>
+        <button data-action="rect-land" type="button">Create rectangular land</button>
         <button data-action="remove-land" type="button" ${project.land.length ? "" : "disabled"}>Remove land</button>
       </div>
       <p class="hint">Hold Alt while dragging to temporarily bypass snapping. Double-click to finish freeform land or polygon objects.</p>
@@ -884,7 +911,7 @@ function renderLandMeasurementControls(project: Project) {
     <div class="edge-lengths">
       <div class="subheading">Side lengths (m)</div>
       ${rows}
-      <p class="hint">Editing a side length moves that side's end point along its current direction.</p>
+      <p class="hint">Rectangular land keeps opposite sides matched. Freeform side edits move that side's end point.</p>
     </div>
   `;
 }
@@ -1304,14 +1331,7 @@ function handleClick(event: MouseEvent) {
   if (action === "rect-land") {
     updateActiveProject(
       (draft) => {
-        draft.land = [
-          { x: 0, y: 0 },
-          { x: 42, y: 0 },
-          { x: 42, y: 28 },
-          { x: 0, y: 28 },
-        ];
-        draft.landFrontEdge = 2;
-        draft.landRotation = 0;
+        applyRectangularLand(draft, state.landRectWidth, state.landRectDepth);
         draft.selected = { kind: "land" };
       },
       true,
@@ -1414,6 +1434,16 @@ function handleInput(event: Event) {
     return;
   }
 
+  if (field.startsWith("landRect.")) {
+    updateLandRectangleDraft(field, target);
+    persist();
+    return;
+  }
+
+  if (isDeferredLandGeometryField(field)) {
+    return;
+  }
+
   if (field === "noteText") {
     state.noteText = target.value;
     persist();
@@ -1441,6 +1471,21 @@ function handleInput(event: Event) {
 
 function handleChange(event: Event) {
   const target = event.target as HTMLInputElement;
+  const field = target.dataset.field;
+
+  if (field?.startsWith("landRect.")) {
+    updateLandRectangleDraft(field, target);
+    persist();
+    render();
+    return;
+  }
+
+  if (field && isDeferredLandGeometryField(field)) {
+    updateActiveProject((project) => {
+      updateProjectField(project, field, target);
+    }, true);
+    return;
+  }
 
   if (target.id === "background-file" && target.files?.[0]) {
     importBackgroundImage(target.files[0]);
@@ -1733,6 +1778,19 @@ function updateNewElement(field: string, target: HTMLInputElement | HTMLSelectEl
   render();
 }
 
+function updateLandRectangleDraft(field: string, target: HTMLInputElement | HTMLSelectElement) {
+  const min = 0.1;
+  const max = 10000;
+
+  if (field === "landRect.width") {
+    state.landRectWidth = clamp(toNumber(target.value, state.landRectWidth), min, max);
+  }
+
+  if (field === "landRect.depth") {
+    state.landRectDepth = clamp(toNumber(target.value, state.landRectDepth), min, max);
+  }
+}
+
 function updateProjectField(project: Project, field: string, target: HTMLInputElement | HTMLSelectElement) {
   if (field === "project.name") {
     project.name = target.value || "Untitled project";
@@ -1885,6 +1943,10 @@ function updateBackgroundField(project: Project, field: string, target: HTMLInpu
 
 function isRecordedField(field: string) {
   return !["project.zoom", "project.name", "project.snapping", "project.showDistances"].includes(field);
+}
+
+function isDeferredLandGeometryField(field: string) {
+  return field === "land.rotation" || field.startsWith("land.edgeLength.");
 }
 
 function finishLandDraft() {
@@ -2454,10 +2516,26 @@ function landEdgeLength(project: Project, index: number) {
   return segment ? distance(segment[0], segment[1]) : 0.1;
 }
 
+function applyRectangularLand(project: Project, width: number, depth: number) {
+  const nextWidth = normalizePositiveNumber(width, 23);
+  const nextDepth = normalizePositiveNumber(depth, 45.5);
+  const rotation = project.land.length >= 3 ? toNumber(project.landRotation, 0) : 0;
+  const center = project.land.length >= 3 ? centroid(project.land) : { x: nextWidth / 2, y: nextDepth / 2 };
+
+  project.land = rectanglePoints(center, nextWidth, nextDepth, rotation);
+  project.landFrontEdge = normalizeLandFrontEdge(project.landFrontEdge, project.land) ?? 2;
+  project.landRotation = rotation;
+}
+
 function resizeLandEdge(project: Project, index: number, nextLength: number) {
   const normalizedIndex = normalizeLandFrontEdge(index, project.land);
 
   if (normalizedIndex === null) {
+    return;
+  }
+
+  const length = normalizePositiveNumber(nextLength, landEdgeLength(project, normalizedIndex));
+  if (resizeRectangularLandEdge(project, normalizedIndex, length)) {
     return;
   }
 
@@ -2470,7 +2548,6 @@ function resizeLandEdge(project: Project, index: number, nextLength: number) {
     return;
   }
 
-  const length = clamp(nextLength, 0.1, 10000);
   const unit = {
     x: (end.x - start.x) / currentLength,
     y: (end.y - start.y) / currentLength,
@@ -2480,6 +2557,84 @@ function resizeLandEdge(project: Project, index: number, nextLength: number) {
     x: start.x + unit.x * length,
     y: start.y + unit.y * length,
   };
+}
+
+function resizeRectangularLandEdge(project: Project, index: number, length: number) {
+  const axes = rectangularLandAxes(project.land);
+
+  if (!axes) {
+    return false;
+  }
+
+  const nextWidth = index % 2 === 0 ? length : axes.width;
+  const nextDepth = index % 2 === 1 ? length : axes.depth;
+  project.land = rectanglePointsFromAxes(axes.center, axes.unitU, axes.unitV, nextWidth, nextDepth);
+  return true;
+}
+
+function rectangularLandAxes(points: Point[]) {
+  if (points.length !== 4) {
+    return undefined;
+  }
+
+  const [p0, p1, p2, p3] = points;
+  const widthA = distance(p0, p1);
+  const widthB = distance(p3, p2);
+  const depthA = distance(p1, p2);
+  const depthB = distance(p0, p3);
+  const width = (widthA + widthB) / 2;
+  const depth = (depthA + depthB) / 2;
+
+  if (width <= 0.05 || depth <= 0.05) {
+    return undefined;
+  }
+
+  const unitU = unitVector(p0, p1);
+  const unitV = unitVector(p0, p3);
+  const relativeTolerance = 0.03;
+  const oppositeSidesMatch =
+    Math.abs(widthA - widthB) <= Math.max(width * relativeTolerance, 0.05) &&
+    Math.abs(depthA - depthB) <= Math.max(depth * relativeTolerance, 0.05);
+  const adjacentSidesSquare = Math.abs(dot(unitU, unitV)) <= 0.03;
+  const expectedP2 = { x: p1.x + p3.x - p0.x, y: p1.y + p3.y - p0.y };
+  const closesRectangle = distance(expectedP2, p2) <= Math.max(Math.max(width, depth) * relativeTolerance, 0.1);
+
+  if (!oppositeSidesMatch || !adjacentSidesSquare || !closesRectangle) {
+    return undefined;
+  }
+
+  return {
+    center: centroid(points),
+    unitU,
+    unitV,
+    width,
+    depth,
+  };
+}
+
+function rectanglePoints(center: Point, width: number, depth: number, rotation: number) {
+  const halfWidth = width / 2;
+  const halfDepth = depth / 2;
+  const points = [
+    { x: center.x - halfWidth, y: center.y - halfDepth },
+    { x: center.x + halfWidth, y: center.y - halfDepth },
+    { x: center.x + halfWidth, y: center.y + halfDepth },
+    { x: center.x - halfWidth, y: center.y + halfDepth },
+  ];
+
+  return points.map((point) => roundPoint(rotatePoint(point, center, rotation)));
+}
+
+function rectanglePointsFromAxes(center: Point, unitU: Point, unitV: Point, width: number, depth: number) {
+  const halfU = { x: unitU.x * width * 0.5, y: unitU.y * width * 0.5 };
+  const halfV = { x: unitV.x * depth * 0.5, y: unitV.y * depth * 0.5 };
+
+  return [
+    { x: center.x - halfU.x - halfV.x, y: center.y - halfU.y - halfV.y },
+    { x: center.x + halfU.x - halfV.x, y: center.y + halfU.y - halfV.y },
+    { x: center.x + halfU.x + halfV.x, y: center.y + halfU.y + halfV.y },
+    { x: center.x - halfU.x + halfV.x, y: center.y - halfU.y + halfV.y },
+  ].map(roundPoint);
 }
 
 function rotateLandTo(project: Project, nextRotation: number) {
@@ -2494,7 +2649,7 @@ function rotateLandTo(project: Project, nextRotation: number) {
   const center = centroid(project.land);
   project.land = project.land.map((point) => {
     const rotated = rotatePoint(point, center, delta);
-    return { x: trimNumber(rotated.x), y: trimNumber(rotated.y) };
+    return roundPoint(rotated);
   });
 }
 
@@ -2522,6 +2677,27 @@ function rotatePoint(point: Point, center: Point, degrees: number) {
     x: center.x + dx * cos - dy * sin,
     y: center.y + dx * sin + dy * cos,
   };
+}
+
+function unitVector(start: Point, end: Point) {
+  const length = distance(start, end);
+
+  if (length <= 0) {
+    return { x: 1, y: 0 };
+  }
+
+  return {
+    x: (end.x - start.x) / length,
+    y: (end.y - start.y) / length,
+  };
+}
+
+function dot(a: Point, b: Point) {
+  return a.x * b.x + a.y * b.y;
+}
+
+function roundPoint(point: Point) {
+  return { x: trimNumber(point.x), y: trimNumber(point.y) };
 }
 
 function centroid(points: Point[]) {
@@ -2598,6 +2774,15 @@ function trimNumber(value: number) {
 }
 
 function toNumber(value: unknown, fallback: number) {
+  if (typeof value === "string") {
+    const normalized = value.trim().replace(",", ".");
+    if (!normalized) {
+      return fallback;
+    }
+    const next = Number(normalized);
+    return Number.isFinite(next) ? next : fallback;
+  }
+
   const next = Number(value);
   return Number.isFinite(next) ? next : fallback;
 }
