@@ -372,6 +372,18 @@ input[type="range"] {
   border: 1px solid rgba(52, 70, 58, 0.34);
   border-radius: 1.15rem;
   box-shadow: 0 2rem 5rem rgba(31, 37, 34, 0.12);
+  touch-action: none;
+  cursor: grab;
+}
+
+#plan-svg:active {
+  cursor: grabbing;
+}
+
+#plan-svg.tool-draw-land,
+#plan-svg.tool-place-rect,
+#plan-svg.tool-place-poly,
+#plan-svg.tool-place-note {
   cursor: crosshair;
 }
 
@@ -395,6 +407,7 @@ input[type="range"] {
   vector-effect: non-scaling-stroke;
   filter: url(#paper-shadow);
   pointer-events: all;
+  cursor: move;
 }
 
 .land-boundary.selected {
@@ -408,6 +421,7 @@ input[type="range"] {
   fill-opacity: 0.7;
   vector-effect: non-scaling-stroke;
   pointer-events: all;
+  cursor: move;
 }
 
 .site-element.selected polygon {
@@ -448,6 +462,7 @@ input[type="range"] {
   stroke-width: 0.12;
   vector-effect: non-scaling-stroke;
   pointer-events: all;
+  cursor: pointer;
 }
 
 .vertex-handle.land {
@@ -473,6 +488,7 @@ input[type="range"] {
 
 .plan-note {
   pointer-events: all;
+  cursor: move;
 }
 
 .plan-note circle {

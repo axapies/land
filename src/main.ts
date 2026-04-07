@@ -131,6 +131,19 @@ type BBox = {
   maxY: number;
 };
 
+type DistanceMeasurement = {
+  label: string;
+  text: Point;
+  start: Point;
+  end: Point;
+};
+
+type NearestDistance = {
+  distance: number;
+  start: Point;
+  end: Point;
+};
+
 const STORAGE_KEY = "land-layout-planner:v1";
 const MAX_HISTORY = 80;
 const WORLD_WIDTH = 72;
@@ -938,7 +951,7 @@ function renderSvg(project: Project, warnings: Map<string, string[]>) {
     selected.kind === "element" ? project.elements.find((element) => element.id === selected.id) : undefined;
 
   return `
-    <svg id="plan-svg" viewBox="${view.x} ${view.y} ${view.width} ${view.height}" preserveAspectRatio="xMidYMin meet" role="img" aria-label="Land planning canvas">
+    <svg id="plan-svg" class="tool-${state.tool}" viewBox="${view.x} ${view.y} ${view.width} ${view.height}" preserveAspectRatio="xMidYMin meet" role="img" aria-label="Land planning canvas">
       <defs>
         <pattern id="minor-grid" width="1" height="1" patternUnits="userSpaceOnUse">
           <path d="M 1 0 L 0 0 0 1" fill="none" stroke="#b6c3b8" stroke-width="0.045" />
@@ -1157,17 +1170,7 @@ function renderNote(note: PlanNote, selected: boolean) {
 }
 
 function renderDistanceOverlay(project: Project, element: SiteElement) {
-  const box = bboxOfElement(element);
-  const center = elementCenter(element);
-  const landBox = project.land.length >= 3 ? bboxFromPoints(project.land) : undefined;
-  const distances = landBox
-    ? [
-        { label: `Left ${formatMeters(box.minX - landBox.minX)}`, x: (landBox.minX + box.minX) / 2, y: center.y },
-        { label: `Right ${formatMeters(landBox.maxX - box.maxX)}`, x: (landBox.maxX + box.maxX) / 2, y: center.y },
-        { label: `Bottom ${formatMeters(box.minY - landBox.minY)}`, x: center.x, y: (landBox.minY + box.minY) / 2 },
-        { label: `Top ${formatMeters(landBox.maxY - box.maxY)}`, x: center.x, y: (landBox.maxY + box.maxY) / 2 },
-      ]
-    : [];
+  const distances = project.land.length >= 3 ? landDistanceMeasurements(project, element) : [];
   const nearest = nearestElementDistance(project, element);
 
   if (!distances.length && !nearest) {
@@ -1179,14 +1182,15 @@ function renderDistanceOverlay(project: Project, element: SiteElement) {
       ${distances
         .map(
           (item) => `
-            <text x="${item.x}" y="${item.y}" text-anchor="middle">${escapeHtml(item.label)}</text>
+            <line x1="${item.start.x}" y1="${item.start.y}" x2="${item.end.x}" y2="${item.end.y}" />
+            <text x="${item.text.x}" y="${item.text.y}" text-anchor="middle">${escapeHtml(item.label)}</text>
           `,
         )
         .join("")}
       ${
-        nearest
-          ? `<line x1="${center.x}" y1="${center.y}" x2="${nearest.center.x}" y2="${nearest.center.y}" />
-             <text x="${(center.x + nearest.center.x) / 2}" y="${(center.y + nearest.center.y) / 2 - 0.8}" text-anchor="middle">Nearest ${formatMeters(
+        nearest && nearest.distance > 0
+          ? `<line x1="${nearest.start.x}" y1="${nearest.start.y}" x2="${nearest.end.x}" y2="${nearest.end.y}" />
+             <text x="${(nearest.start.x + nearest.end.x) / 2}" y="${(nearest.start.y + nearest.end.y) / 2 - 0.8}" text-anchor="middle">Nearest ${formatMeters(
                nearest.distance,
              )}</text>`
           : ""
@@ -1257,10 +1261,10 @@ function toolStatus() {
   }
 
   if (state.tool === "pan") {
-    return "Pan: drag the canvas to move the view.";
+    return "Pan: drag blank canvas to move the view; objects and land remain draggable.";
   }
 
-  return "Select: drag objects or edit exact values in the inspector.";
+  return "Canvas navigation: drag blank grid to pan, or drag land, objects, and notes to move them.";
 }
 
 function handleClick(event: MouseEvent) {
@@ -1466,6 +1470,10 @@ function handleInput(event: Event) {
     return;
   }
 
+  if (isDeferredInputField(field)) {
+    return;
+  }
+
   if (field.startsWith("new.")) {
     updateNewElement(field, target);
     return;
@@ -1474,10 +1482,6 @@ function handleInput(event: Event) {
   if (field.startsWith("landRect.")) {
     updateLandRectangleDraft(field, target);
     persist();
-    return;
-  }
-
-  if (isDeferredLandGeometryField(field)) {
     return;
   }
 
@@ -1510,6 +1514,11 @@ function handleChange(event: Event) {
   const target = event.target as HTMLInputElement;
   const field = target.dataset.field;
 
+  if (field && isDeferredNewElementGeometryField(field)) {
+    updateNewElement(field, target);
+    return;
+  }
+
   if (field?.startsWith("landRect.")) {
     updateLandRectangleDraft(field, target);
     persist();
@@ -1517,7 +1526,7 @@ function handleChange(event: Event) {
     return;
   }
 
-  if (field && isDeferredLandGeometryField(field)) {
+  if (field && isDeferredGeometryField(field)) {
     updateActiveProject((project) => {
       updateProjectField(project, field, target);
     }, true);
@@ -1550,10 +1559,11 @@ function handlePointerDown(event: PointerEvent) {
   const elementNode = target.closest<SVGElement>("[data-element-id]");
   const noteNode = target.closest<SVGElement>("[data-note-id]");
   const isLand = Boolean(target.closest("[data-land]"));
+  const canNavigateCanvas = isCanvasNavigationTool();
 
   event.preventDefault();
 
-  if (vertex?.dataset.vertexKind === "land") {
+  if (vertex?.dataset.vertexKind === "land" && canNavigateCanvas) {
     pushHistory(activeProject());
     activeProject().selected = { kind: "land" };
     drag = { type: "land-vertex", index: Number(vertex.dataset.index ?? 0) };
@@ -1561,7 +1571,7 @@ function handlePointerDown(event: PointerEvent) {
     return;
   }
 
-  if (vertex?.dataset.vertexKind === "element" && vertex.dataset.elementId) {
+  if (vertex?.dataset.vertexKind === "element" && vertex.dataset.elementId && canNavigateCanvas) {
     pushHistory(activeProject());
     activeProject().selected = { kind: "element", id: vertex.dataset.elementId };
     drag = {
@@ -1573,7 +1583,7 @@ function handlePointerDown(event: PointerEvent) {
     return;
   }
 
-  if (elementNode?.dataset.elementId && state.tool === "select") {
+  if (elementNode?.dataset.elementId && canNavigateCanvas) {
     updateActiveProject((project) => {
       project.selected = { kind: "element", id: elementNode.dataset.elementId ?? "" };
     }, false);
@@ -1582,7 +1592,7 @@ function handlePointerDown(event: PointerEvent) {
     return;
   }
 
-  if (noteNode?.dataset.noteId && state.tool === "select") {
+  if (noteNode?.dataset.noteId && canNavigateCanvas) {
     updateActiveProject((project) => {
       project.selected = { kind: "note", id: noteNode.dataset.noteId ?? "" };
     }, false);
@@ -1591,22 +1601,13 @@ function handlePointerDown(event: PointerEvent) {
     return;
   }
 
-  if (isLand && state.tool === "select") {
+  if (isLand && canNavigateCanvas) {
     const project = activeProject();
     project.selected = { kind: "land" };
     pushHistory(project);
     drag = { type: "land", lastPoint: point };
     persist();
     render();
-    return;
-  }
-
-  if (state.tool === "pan") {
-    drag = {
-      type: "pan",
-      startClient: { x: event.clientX, y: event.clientY },
-      startPan: { ...activeProject().pan },
-    };
     return;
   }
 
@@ -1660,6 +1661,15 @@ function handlePointerDown(event: PointerEvent) {
       true,
     );
     state.tool = "select";
+    return;
+  }
+
+  if (canNavigateCanvas) {
+    drag = {
+      type: "pan",
+      startClient: { x: event.clientX, y: event.clientY },
+      startPan: { ...activeProject().pan },
+    };
     return;
   }
 
@@ -1772,6 +1782,19 @@ function handleDoubleClick(event: MouseEvent) {
 }
 
 function handleKeyDown(event: KeyboardEvent) {
+  const target = event.target;
+
+  if (
+    event.key === "Enter" &&
+    target instanceof HTMLInputElement &&
+    target.dataset.field &&
+    isDeferredInputField(target.dataset.field)
+  ) {
+    event.preventDefault();
+    target.blur();
+    return;
+  }
+
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z" && event.shiftKey) {
     event.preventDefault();
     redo();
@@ -1994,8 +2017,34 @@ function isRecordedField(field: string) {
   return !["project.zoom", "project.name", "project.snapping", "project.showDistances"].includes(field);
 }
 
+function isCanvasNavigationTool() {
+  return state.tool === "select" || state.tool === "pan";
+}
+
 function isDeferredLandGeometryField(field: string) {
   return field === "land.rotation" || field.startsWith("land.edgeLength.");
+}
+
+function isDeferredElementGeometryField(field: string) {
+  return (
+    field === "element.x" ||
+    field === "element.y" ||
+    field === "element.width" ||
+    field === "element.height" ||
+    field === "element.rotation"
+  );
+}
+
+function isDeferredNewElementGeometryField(field: string) {
+  return field === "new.width" || field === "new.height";
+}
+
+function isDeferredGeometryField(field: string) {
+  return isDeferredLandGeometryField(field) || isDeferredElementGeometryField(field);
+}
+
+function isDeferredInputField(field: string) {
+  return isDeferredGeometryField(field) || isDeferredNewElementGeometryField(field);
 }
 
 function finishLandDraft() {
@@ -2467,7 +2516,7 @@ function getWarnings(project: Project) {
     const elementWarnings: string[] = [];
     const points = pointsOfElement(element);
 
-    if (land.length >= 3 && points.some((point) => !pointInPolygon(point, land))) {
+    if (land.length >= 3 && !polygonWithinPolygon(points, land)) {
       elementWarnings.push("Object leaves the land boundary.");
     }
 
@@ -2476,7 +2525,7 @@ function getWarnings(project: Project) {
         continue;
       }
 
-      if (boxesOverlap(bboxOfElement(element), bboxOfElement(other))) {
+      if (polygonsOverlap(points, pointsOfElement(other))) {
         elementWarnings.push(`Overlaps ${other.name}.`);
         break;
       }
@@ -2490,27 +2539,77 @@ function getWarnings(project: Project) {
   return warnings;
 }
 
-function nearestElementDistance(project: Project, element: SiteElement) {
-  const sourceBox = bboxOfElement(element);
-  const sourceCenter = elementCenter(element);
-  let nearest: { distance: number; center: Point } | undefined;
+function nearestElementDistance(project: Project, element: SiteElement): NearestDistance | undefined {
+  const sourcePoints = pointsOfElement(element);
+  let nearest: NearestDistance | undefined;
 
   for (const other of project.elements) {
     if (other.id === element.id) {
       continue;
     }
 
-    const otherBox = bboxOfElement(other);
-    const dx = Math.max(otherBox.minX - sourceBox.maxX, sourceBox.minX - otherBox.maxX, 0);
-    const dy = Math.max(otherBox.minY - sourceBox.maxY, sourceBox.minY - otherBox.maxY, 0);
-    const gap = Math.sqrt(dx * dx + dy * dy);
+    const gap = polygonDistance(sourcePoints, pointsOfElement(other));
 
-    if (!nearest || gap < nearest.distance) {
-      nearest = { distance: gap, center: elementCenter(other) };
+    if (!nearest || gap.distance < nearest.distance) {
+      nearest = gap;
     }
   }
 
   return nearest;
+}
+
+function landDistanceMeasurements(project: Project, element: SiteElement): DistanceMeasurement[] {
+  const elementPoints = pointsOfElement(element);
+  const elementMidpoint = elementCenter(element);
+  const landCenter = centroid(project.land);
+
+  return landSegments(project.land)
+    .map(([start, end], index) => {
+      const length = distance(start, end);
+      if (length <= 0.001) {
+        return undefined;
+      }
+
+      const axis = { x: (end.x - start.x) / length, y: (end.y - start.y) / length };
+      let inward = { x: -axis.y, y: axis.x };
+      const midpoint = { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 };
+      const towardCenter = { x: landCenter.x - midpoint.x, y: landCenter.y - midpoint.y };
+
+      if (dot(inward, towardCenter) < 0) {
+        inward = { x: -inward.x, y: -inward.y };
+      }
+
+      const boundaryProjection = dot(start, inward);
+      const elementProjection = Math.min(...elementPoints.map((point) => dot(point, inward)));
+      const rawDistance = elementProjection - boundaryProjection;
+      const visualDistance = Math.max(rawDistance, 0);
+      const sideOffset = clamp(
+        dot({ x: elementMidpoint.x - start.x, y: elementMidpoint.y - start.y }, axis),
+        0,
+        length,
+      );
+      const sidePoint = { x: start.x + axis.x * sideOffset, y: start.y + axis.y * sideOffset };
+      const objectPoint = {
+        x: sidePoint.x + inward.x * visualDistance,
+        y: sidePoint.y + inward.y * visualDistance,
+      };
+      const textPoint =
+        visualDistance > 0.35
+          ? { x: (sidePoint.x + objectPoint.x) / 2, y: (sidePoint.y + objectPoint.y) / 2 }
+          : { x: sidePoint.x + inward.x * 0.8, y: sidePoint.y + inward.y * 0.8 };
+
+      return {
+        label: `${landDistanceLabel(project, index)} ${formatMeters(rawDistance)}`,
+        text: roundPoint(textPoint),
+        start: roundPoint(sidePoint),
+        end: roundPoint(objectPoint),
+      };
+    })
+    .filter((measurement): measurement is DistanceMeasurement => Boolean(measurement));
+}
+
+function landDistanceLabel(project: Project, index: number) {
+  return project.landFrontEdge === index ? "Front" : `Side ${index + 1}`;
 }
 
 function bboxFromPoints(points: Point[]): BBox {
@@ -2529,10 +2628,6 @@ function bboxFromPoints(points: Point[]): BBox {
   );
 }
 
-function boxesOverlap(a: BBox, b: BBox) {
-  return a.minX < b.maxX && a.maxX > b.minX && a.minY < b.maxY && a.maxY > b.minY;
-}
-
 function pointInPolygon(point: Point, polygon: Point[]) {
   let inside = false;
 
@@ -2549,6 +2644,108 @@ function pointInPolygon(point: Point, polygon: Point[]) {
   }
 
   return inside;
+}
+
+function polygonWithinPolygon(inner: Point[], outer: Point[]) {
+  if (inner.length < 3 || outer.length < 3) {
+    return false;
+  }
+
+  const allPointsInside = inner.every((point) => pointInPolygon(point, outer) || pointOnPolygon(point, outer));
+  const crossesBoundary = landSegments(inner).some(([start, end]) =>
+    landSegments(outer).some(([outerStart, outerEnd]) => segmentsProperlyIntersect(start, end, outerStart, outerEnd)),
+  );
+
+  return allPointsInside && !crossesBoundary;
+}
+
+function polygonsOverlap(a: Point[], b: Point[]) {
+  if (a.length < 3 || b.length < 3) {
+    return false;
+  }
+
+  const edgesCross = landSegments(a).some(([start, end]) =>
+    landSegments(b).some(([otherStart, otherEnd]) => segmentsProperlyIntersect(start, end, otherStart, otherEnd)),
+  );
+
+  return edgesCross || a.some((point) => pointInPolygon(point, b)) || b.some((point) => pointInPolygon(point, a));
+}
+
+function polygonDistance(a: Point[], b: Point[]): NearestDistance {
+  if (polygonsOverlap(a, b)) {
+    const start = centroid(a);
+    const end = centroid(b);
+    return { distance: 0, start, end };
+  }
+
+  let nearest: NearestDistance = {
+    distance: Number.POSITIVE_INFINITY,
+    start: centroid(a),
+    end: centroid(b),
+  };
+
+  for (const point of a) {
+    for (const [start, end] of landSegments(b)) {
+      const candidate = nearestDistanceToSegment(point, start, end);
+      if (candidate.distance < nearest.distance) {
+        nearest = candidate;
+      }
+    }
+  }
+
+  for (const point of b) {
+    for (const [start, end] of landSegments(a)) {
+      const candidate = nearestDistanceToSegment(point, start, end);
+      const reversed = { distance: candidate.distance, start: candidate.end, end: candidate.start };
+      if (reversed.distance < nearest.distance) {
+        nearest = reversed;
+      }
+    }
+  }
+
+  return nearest.distance === Number.POSITIVE_INFINITY
+    ? { distance: distance(nearest.start, nearest.end), start: nearest.start, end: nearest.end }
+    : nearest;
+}
+
+function nearestDistanceToSegment(point: Point, start: Point, end: Point): NearestDistance {
+  const projected = projectPointToSegment(point, start, end);
+
+  return {
+    distance: distance(point, projected),
+    start: point,
+    end: projected,
+  };
+}
+
+function pointOnPolygon(point: Point, polygon: Point[]) {
+  return landSegments(polygon).some(([start, end]) => pointOnSegment(point, start, end));
+}
+
+function pointOnSegment(point: Point, start: Point, end: Point) {
+  const epsilon = 0.001;
+  const crossProduct = cross({ x: end.x - start.x, y: end.y - start.y }, { x: point.x - start.x, y: point.y - start.y });
+
+  if (Math.abs(crossProduct) > epsilon) {
+    return false;
+  }
+
+  return (
+    point.x >= Math.min(start.x, end.x) - epsilon &&
+    point.x <= Math.max(start.x, end.x) + epsilon &&
+    point.y >= Math.min(start.y, end.y) - epsilon &&
+    point.y <= Math.max(start.y, end.y) + epsilon
+  );
+}
+
+function segmentsProperlyIntersect(a: Point, b: Point, c: Point, d: Point) {
+  const epsilon = 0.001;
+  const abC = cross({ x: b.x - a.x, y: b.y - a.y }, { x: c.x - a.x, y: c.y - a.y });
+  const abD = cross({ x: b.x - a.x, y: b.y - a.y }, { x: d.x - a.x, y: d.y - a.y });
+  const cdA = cross({ x: d.x - c.x, y: d.y - c.y }, { x: a.x - c.x, y: a.y - c.y });
+  const cdB = cross({ x: d.x - c.x, y: d.y - c.y }, { x: b.x - c.x, y: b.y - c.y });
+
+  return abC * abD < -epsilon && cdA * cdB < -epsilon;
 }
 
 function polygonArea(points: Point[]) {
@@ -2772,6 +2969,10 @@ function unitVector(start: Point, end: Point) {
 
 function dot(a: Point, b: Point) {
   return a.x * b.x + a.y * b.y;
+}
+
+function cross(a: Point, b: Point) {
+  return a.x * b.y - a.y * b.x;
 }
 
 function roundPoint(point: Point) {
