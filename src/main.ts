@@ -130,6 +130,8 @@ const STORAGE_KEY = "land-layout-planner:v1";
 const MAX_HISTORY = 80;
 const WORLD_WIDTH = 72;
 const WORLD_HEIGHT = 46;
+const DEFAULT_PAN: Point = { x: -8, y: 0 };
+const LEGACY_DEFAULT_PAN: Point = { x: -8, y: -7 };
 
 const categoryDefaults: Record<
   ElementCategory,
@@ -282,7 +284,7 @@ function createProject(name: string, seeded = true): Project {
     createdAt: now,
     updatedAt: now,
     zoom: 1,
-    pan: { x: -8, y: -7 },
+    pan: { ...DEFAULT_PAN },
     land,
     landFrontEdge: seeded ? 2 : null,
     elements,
@@ -303,7 +305,7 @@ function normalizeProject(input: unknown): Project {
   project.createdAt = typeof source.createdAt === "string" ? source.createdAt : project.createdAt;
   project.updatedAt = typeof source.updatedAt === "string" ? source.updatedAt : project.updatedAt;
   project.zoom = clamp(toNumber(source.zoom, 1), 0.45, 4);
-  project.pan = normalizePoint(source.pan, project.pan);
+  project.pan = normalizePan(source.pan, project.pan);
   project.land = normalizePoints(source.land, project.land);
   project.landFrontEdge = normalizeLandFrontEdge(source.landFrontEdge, project.land);
   project.elements = Array.isArray(source.elements)
@@ -889,7 +891,7 @@ function renderSvg(project: Project, warnings: Map<string, string[]>) {
     selected.kind === "element" ? project.elements.find((element) => element.id === selected.id) : undefined;
 
   return `
-    <svg id="plan-svg" viewBox="${view.x} ${view.y} ${view.width} ${view.height}" role="img" aria-label="Land planning canvas">
+    <svg id="plan-svg" viewBox="${view.x} ${view.y} ${view.width} ${view.height}" preserveAspectRatio="xMidYMin meet" role="img" aria-label="Land planning canvas">
       <defs>
         <pattern id="minor-grid" width="1" height="1" patternUnits="userSpaceOnUse">
           <path d="M 1 0 L 0 0 0 1" fill="none" stroke="#b6c3b8" stroke-width="0.045" />
@@ -1366,7 +1368,7 @@ function handleClick(event: MouseEvent) {
   if (action === "zoom-reset") {
     updateActiveProject((draft) => {
       draft.zoom = 1;
-      draft.pan = { x: -8, y: -7 };
+      draft.pan = { ...DEFAULT_PAN };
     });
     return;
   }
@@ -2506,6 +2508,16 @@ function normalizePoint(input: unknown, fallback: Point) {
   };
 }
 
+function normalizePan(input: unknown, fallback: Point) {
+  const pan = normalizePoint(input, fallback);
+
+  if (pointsMatch(pan, LEGACY_DEFAULT_PAN)) {
+    return { ...DEFAULT_PAN };
+  }
+
+  return pan;
+}
+
 function normalizePoints(input: unknown, fallback: Point[]) {
   if (!Array.isArray(input)) {
     return fallback;
@@ -2528,6 +2540,10 @@ function normalizeLandFrontEdge(input: unknown, land: Point[]) {
 
 function distance(a: Point, b: Point) {
   return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+function pointsMatch(a: Point, b: Point) {
+  return Math.abs(a.x - b.x) < 0.001 && Math.abs(a.y - b.y) < 0.001;
 }
 
 function pointsAttr(points: Point[]) {
