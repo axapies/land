@@ -117,6 +117,7 @@ type AppState = {
 type DragState =
   | { type: "none" }
   | { type: "pan"; startClient: Point; startPan: Point }
+  | { type: "land"; lastPoint: Point }
   | { type: "element"; id: string; lastPoint: Point }
   | { type: "note"; id: string; lastPoint: Point }
   | { type: "land-vertex"; index: number }
@@ -1555,9 +1556,12 @@ function handlePointerDown(event: PointerEvent) {
   }
 
   if (isLand && state.tool === "select") {
-    updateActiveProject((project) => {
-      project.selected = { kind: "land" };
-    });
+    const project = activeProject();
+    project.selected = { kind: "land" };
+    pushHistory(project);
+    drag = { type: "land", lastPoint: point };
+    persist();
+    render();
     return;
   }
 
@@ -1669,6 +1673,15 @@ function handlePointerMove(event: PointerEvent) {
   }
 
   const delta = { x: nextPoint.x - drag.lastPoint.x, y: nextPoint.y - drag.lastPoint.y };
+
+  if (drag.type === "land") {
+    project.land = movePoints(project.land, delta);
+    drag = { ...drag, lastPoint: nextPoint };
+    project.updatedAt = new Date().toISOString();
+    persist();
+    render();
+    return;
+  }
 
   if (drag.type === "element") {
     const element = project.elements.find((candidate) => candidate.id === drag.id);
@@ -2346,7 +2359,11 @@ function moveElement(element: SiteElement, delta: Point) {
     return;
   }
 
-  element.points = element.points.map((point) => ({
+  element.points = movePoints(element.points, delta);
+}
+
+function movePoints(points: Point[], delta: Point) {
+  return points.map((point) => ({
     x: point.x + delta.x,
     y: point.y + delta.y,
   }));
