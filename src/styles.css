@@ -443,16 +443,20 @@ input[type="range"] {
   font-size: 1.05px;
   font-weight: 720;
   fill: #16231f;
-  paint-order: stroke;
-  stroke: rgba(247, 244, 236, 0.92);
-  stroke-width: 0.22px;
+  paint-order: stroke fill;
+  stroke: rgba(247, 244, 236, 0.72);
+  stroke-width: 0.14px;
   stroke-linejoin: round;
   pointer-events: none;
 }
 
+.site-element text {
+  fill: #10231f;
+}
+
 .site-element .dimension-label {
   font-size: 0.72px;
-  fill: #46534d;
+  fill: #24362f;
 }
 
 .vertex-handle,

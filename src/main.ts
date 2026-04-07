@@ -1264,7 +1264,7 @@ function toolStatus() {
     return "Pan: drag blank canvas to move the view; objects and land remain draggable.";
   }
 
-  return "Canvas navigation: drag blank grid to pan, or drag land, objects, and notes to move them.";
+  return "Canvas navigation: drag blank grid to pan, drag items to move, or use arrow keys for 0.1 m nudges.";
 }
 
 function handleClick(event: MouseEvent) {
@@ -1807,6 +1807,10 @@ function handleKeyDown(event: KeyboardEvent) {
     return;
   }
 
+  if (handleKeyboardNudge(event)) {
+    return;
+  }
+
   if (event.key === "Escape") {
     state.landDraft = [];
     state.elementDraft = [];
@@ -1814,6 +1818,79 @@ function handleKeyDown(event: KeyboardEvent) {
     drag = { type: "none" };
     render();
   }
+}
+
+function handleKeyboardNudge(event: KeyboardEvent) {
+  const delta = keyboardNudgeDelta(event);
+
+  if (!delta || event.metaKey || event.ctrlKey || isTypingTarget(event.target)) {
+    return false;
+  }
+
+  const project = activeProject();
+  if (project.selected.kind === "none") {
+    return false;
+  }
+
+  event.preventDefault();
+  updateActiveProject((draft) => {
+    nudgeSelection(draft, delta);
+  }, true);
+  return true;
+}
+
+function keyboardNudgeDelta(event: KeyboardEvent): Point | undefined {
+  const step = event.shiftKey ? 1 : 0.1;
+
+  if (event.key === "ArrowLeft") {
+    return { x: -step, y: 0 };
+  }
+
+  if (event.key === "ArrowRight") {
+    return { x: step, y: 0 };
+  }
+
+  if (event.key === "ArrowUp") {
+    return { x: 0, y: -step };
+  }
+
+  if (event.key === "ArrowDown") {
+    return { x: 0, y: step };
+  }
+
+  return undefined;
+}
+
+function nudgeSelection(project: Project, delta: Point) {
+  if (project.selected.kind === "land") {
+    project.land = movePoints(project.land, delta);
+    return;
+  }
+
+  if (project.selected.kind === "element") {
+    const element = project.elements.find((candidate) => candidate.id === project.selected.id);
+    if (element) {
+      moveElement(element, delta);
+    }
+    return;
+  }
+
+  if (project.selected.kind === "note") {
+    const note = project.notes.find((candidate) => candidate.id === project.selected.id);
+    if (note) {
+      note.x += delta.x;
+      note.y += delta.y;
+    }
+  }
+}
+
+function isTypingTarget(target: EventTarget | null) {
+  return (
+    target instanceof HTMLInputElement ||
+    target instanceof HTMLSelectElement ||
+    target instanceof HTMLTextAreaElement ||
+    (target instanceof HTMLElement && target.isContentEditable)
+  );
 }
 
 function updateNewElement(field: string, target: HTMLInputElement | HTMLSelectElement) {
