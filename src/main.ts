@@ -949,6 +949,7 @@ function renderSvg(project: Project, warnings: Map<string, string[]>) {
           ? `<polygon class="land-boundary ${selected.kind === "land" ? "selected" : ""}" data-land="true" points="${landPoints}" />`
           : renderEmptyCanvasHint(view)
       }
+      ${hasLand ? renderLandSideLabels(project) : ""}
       ${hasLand ? renderLandFront(project) : ""}
       ${renderLandVertexHandles(project)}
       ${renderLandDraft()}
@@ -1009,6 +1010,31 @@ function renderLandFront(project: Project) {
     <g class="land-front-marker">
       <line x1="${start.x}" y1="${start.y}" x2="${end.x}" y2="${end.y}" />
       <text x="${label.x}" y="${label.y}" text-anchor="middle">FRONT</text>
+    </g>
+  `;
+}
+
+function renderLandSideLabels(project: Project) {
+  const center = centroid(project.land);
+
+  return `
+    <g class="land-side-labels">
+      ${landSegments(project.land)
+        .map(([start, end]) => {
+          const midpoint = { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 };
+          const vector = { x: end.x - start.x, y: end.y - start.y };
+          const length = Math.max(distance(start, end), 0.001);
+          let normal = { x: -vector.y / length, y: vector.x / length };
+          const outward = { x: midpoint.x - center.x, y: midpoint.y - center.y };
+
+          if (dot(normal, outward) < 0) {
+            normal = { x: -normal.x, y: -normal.y };
+          }
+
+          const label = { x: midpoint.x + normal.x * 1.1, y: midpoint.y + normal.y * 1.1 };
+          return `<text x="${trimNumber(label.x)}" y="${trimNumber(label.y)}" text-anchor="middle">${formatMeters(length)}</text>`;
+        })
+        .join("")}
     </g>
   `;
 }

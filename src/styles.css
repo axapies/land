@@ -508,6 +508,20 @@ input[type="range"] {
   pointer-events: none;
 }
 
+.land-side-labels {
+  pointer-events: none;
+}
+
+.land-side-labels text {
+  font-size: 0.86px;
+  font-weight: 780;
+  fill: #143f47;
+  paint-order: stroke;
+  stroke: rgba(251, 247, 236, 0.94);
+  stroke-width: 0.22px;
+  stroke-linejoin: round;
+}
+
 .land-front-marker line {
   stroke: #b54b2f;
   stroke-width: 0.34;
