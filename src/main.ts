@@ -63,6 +63,7 @@ type Project = {
   pan: Point;
   land: Point[];
   landFrontEdge: number | null;
+  landRotation: number;
   elements: SiteElement[];
   notes: PlanNote[];
   background?: BackgroundImageState;
@@ -287,6 +288,7 @@ function createProject(name: string, seeded = true): Project {
     pan: { ...DEFAULT_PAN },
     land,
     landFrontEdge: seeded ? 2 : null,
+    landRotation: 0,
     elements,
     notes,
     showDistances: true,
@@ -308,6 +310,7 @@ function normalizeProject(input: unknown): Project {
   project.pan = normalizePan(source.pan, project.pan);
   project.land = normalizePoints(source.land, project.land);
   project.landFrontEdge = normalizeLandFrontEdge(source.landFrontEdge, project.land);
+  project.landRotation = toNumber(source.landRotation, 0);
   project.elements = Array.isArray(source.elements)
     ? source.elements.map(normalizeElement).filter(Boolean)
     : project.elements;
@@ -703,11 +706,17 @@ function renderInspector(
         <p class="metric-line">Envelope <strong>${formatMeters(bbox.maxX - bbox.minX)} x ${formatMeters(
           bbox.maxY - bbox.minY,
         )}</strong></p>
-        <label class="field">Front of land
-          <select data-field="land.frontEdge">
-            ${renderFrontEdgeOptions(project)}
-          </select>
-        </label>
+        <div class="field-pair">
+          <label class="field">Front of land
+            <select data-field="land.frontEdge">
+              ${renderFrontEdgeOptions(project)}
+            </select>
+          </label>
+          <label class="field">Rotation (deg)
+            <input data-field="land.rotation" type="number" step="1" value="${roundM(project.landRotation)}" />
+          </label>
+        </div>
+        <p class="hint">Use rotation to match the land boundary to the north arrow. Positive values rotate clockwise.</p>
         ${renderLandMeasurementControls(project)}
         <p class="hint">Drag vertex handles on the canvas to edit the freeform boundary.</p>
         <button class="danger-button" data-action="remove-land" type="button">Remove land</button>
@@ -1302,6 +1311,7 @@ function handleClick(event: MouseEvent) {
           { x: 0, y: 28 },
         ];
         draft.landFrontEdge = 2;
+        draft.landRotation = 0;
         draft.selected = { kind: "land" };
       },
       true,
@@ -1315,6 +1325,7 @@ function handleClick(event: MouseEvent) {
       (draft) => {
         draft.land = [];
         draft.landFrontEdge = null;
+        draft.landRotation = 0;
         draft.selected = { kind: "none" };
       },
       true,
@@ -1748,6 +1759,10 @@ function updateProjectField(project: Project, field: string, target: HTMLInputEl
       target.value === "" ? null : normalizeLandFrontEdge(toNumber(target.value, -1), project.land);
   }
 
+  if (field === "land.rotation") {
+    rotateLandTo(project, toNumber(target.value, project.landRotation));
+  }
+
   if (field.startsWith("land.edgeLength.")) {
     const index = toNumber(field.replace("land.edgeLength.", ""), -1);
     resizeLandEdge(project, index, toNumber(target.value, landEdgeLength(project, index)));
@@ -1882,6 +1897,7 @@ function finishLandDraft() {
     (project) => {
       project.land = points;
       project.landFrontEdge = null;
+      project.landRotation = 0;
       project.selected = { kind: "land" };
     },
     true,
@@ -2145,6 +2161,7 @@ function snapshotProject(project: Project): ProjectSnapshot {
       pan: project.pan,
       land: project.land,
       landFrontEdge: project.landFrontEdge,
+      landRotation: project.landRotation,
       elements: project.elements,
       notes: project.notes,
       background: project.background,
@@ -2156,8 +2173,10 @@ function snapshotProject(project: Project): ProjectSnapshot {
 }
 
 function restoreProject(snapshot: ProjectSnapshot): Project {
+  const restored = JSON.parse(JSON.stringify(snapshot)) as ProjectSnapshot;
   return {
-    ...JSON.parse(JSON.stringify(snapshot)),
+    ...restored,
+    landRotation: toNumber(restored.landRotation, 0),
     history: [],
     future: [],
   } as Project;
@@ -2461,6 +2480,22 @@ function resizeLandEdge(project: Project, index: number, nextLength: number) {
     x: start.x + unit.x * length,
     y: start.y + unit.y * length,
   };
+}
+
+function rotateLandTo(project: Project, nextRotation: number) {
+  const currentRotation = toNumber(project.landRotation, 0);
+  const delta = nextRotation - currentRotation;
+  project.landRotation = nextRotation;
+
+  if (project.land.length < 3 || Math.abs(delta) < 0.001) {
+    return;
+  }
+
+  const center = centroid(project.land);
+  project.land = project.land.map((point) => {
+    const rotated = rotatePoint(point, center, delta);
+    return { x: trimNumber(rotated.x), y: trimNumber(rotated.y) };
+  });
 }
 
 function projectPointToSegment(point: Point, start: Point, end: Point) {
